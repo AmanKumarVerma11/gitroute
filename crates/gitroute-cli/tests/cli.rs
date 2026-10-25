@@ -1,0 +1,283 @@
+//! Drives the `gitroute` binary against a temp HOME; never touches the real config.
+
+use std::fs;
+use std::os::unix::fs::symlink;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+const CONFIG: &str = r#"
+version = 1
+default_account_id = 1
+
+[[accounts]]
+id = 1
+login = "AmanKumarVerma11"
+host = "github.com"
+avatar_url = ""
+commit_name = "Aman"
+commit_email = "1+AmanKumarVerma11@users.noreply.github.com"
+
+[[accounts]]
+id = 2
+login = "amannnsyn"
+host = "github.com"
+avatar_url = ""
+commit_name = "Aman"
+commit_email = "aman@example.com"
+"#;
+
+struct Env {
+    _tmp: tempfile::TempDir,
+    home: PathBuf,
+}
+
+impl Env {
+    fn new() -> Env {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().canonicalize().unwrap();
+        let config = home.join("Library/Application Support/gitroute/config.toml");
+        fs::create_dir_all(config.parent().unwrap()).unwrap();
+        fs::write(config, CONFIG).unwrap();
+        fs::create_dir_all(home.join("Code/Synthesys/oss/tool")).unwrap();
+        Env { _tmp: tmp, home }
+    }
+
+    /// Runs `gitroute` from `cwd` (relative to HOME); returns stdout, or panics with stderr.
+    fn run_in(&self, cwd: &str, args: &[&str]) -> String {
+        let out = self.output(cwd, args);
+        assert!(
+            out.status.success(),
+            "gitroute {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    fn run(&self, args: &[&str]) -> String {
+        self.run_in("", args)
+    }
+
+    /// Runs `gitroute` expecting failure; returns stderr.
+    fn fail(&self, args: &[&str]) -> String {
+        let out = self.output("", args);
+        assert!(
+            !out.status.success(),
+            "gitroute {args:?} should have failed"
+        );
+        String::from_utf8(out.stderr).unwrap()
+    }
+
+    fn output(&self, cwd: &str, args: &[&str]) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_gitroute"))
+            .args(args)
+            .env("HOME", &self.home)
+            .env("GIT_CONFIG_GLOBAL", self.home.join(".gitconfig"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GITROUTE_TOKEN_FILE", self.tokens())
+            .current_dir(self.home.join(cwd))
+            .output()
+            .unwrap()
+    }
+
+    fn p(&self, rel: &str) -> String {
+        self.home.join(rel).display().to_string()
+    }
+
+    fn tokens(&self) -> PathBuf {
+        self.home.join("tokens.toml")
+    }
+}
+
+#[test]
+fn accounts_and_logout() {
+    let env = Env::new();
+    fs::write(
+        env.tokens(),
+        "1 = '{\"access_token\":\"gho_personal\"}'\n2 = '{\"access_token\":\"gho_work\"}'\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        env.run(&["accounts"]),
+        "* AmanKumarVerma11  Aman <1+AmanKumarVerma11@users.noreply.github.com>  ok\n  \
+         amannnsyn  Aman <aman@example.com>  ok\n"
+    );
+
+    let syn = env.p("Code/Synthesys");
+    env.run(&["rule", "add", &syn, "amannnsyn"]);
+    assert_eq!(
+        env.run(&["logout", "amannnsyn"]),
+        format!(
+            "removed amannnsyn and its token\nrule {syn}/ still points at amannnsyn; \
+             it resolves to nothing until amannnsyn is added again\n"
+        )
+    );
+    let tokens = fs::read_to_string(env.tokens()).unwrap();
+    assert!(
+        tokens.contains("gho_personal") && !tokens.contains("gho_work"),
+        "{tokens}"
+    );
+    assert_eq!(
+        env.run(&["which", &syn]),
+        format!("{syn} → rule {syn}/ → account 2, which isn't in the config\n")
+    );
+
+    // An expired token that can't be refreshed flags the account, and the
+    // flag is saved. (No network: there's no refresh token to try.)
+    fs::write(
+        env.tokens(),
+        "1 = '{\"access_token\":\"gho_personal\",\"expires_at\":1}'\n",
+    )
+    .unwrap();
+    let out = env.run(&["accounts"]);
+    assert!(
+        out.ends_with("needs re-login (token expired and can't be refreshed)\n"),
+        "{out}"
+    );
+    assert!(env.run(&["accounts"]).ends_with("  needs re-login\n"));
+    assert_eq!(
+        env.run(&["logout", "AmanKumarVerma11"]),
+        "removed AmanKumarVerma11 and its token\n"
+    );
+    assert_eq!(
+        env.run(&["accounts"]),
+        "no accounts; add one with `gitroute login`\n"
+    );
+}
+
+fn path(p: &Path) -> &str {
+    p.to_str().unwrap()
+}
+
+#[test]
+fn rules_default_and_which() {
+    let env = Env::new();
+    let (syn, oss, tool) = (
+        env.p("Code/Synthesys"),
+        env.p("Code/Synthesys/oss"),
+        env.p("Code/Synthesys/oss/tool"),
+    );
+
+    assert_eq!(env.run(&["rule", "ls"]), "no rules\n");
+
+    // The brief's example: oss/ has no rule, so it inherits work from Synthesys/.
+    assert_eq!(
+        env.run(&["rule", "add", "~/Code/Synthesys/", "amannnsyn"]),
+        format!("added {syn}/ → amannnsyn\n")
+    );
+    assert_eq!(
+        env.run(&["which", "Code/Synthesys/oss/tool"]),
+        format!("{tool} → rule {syn}/ → amannnsyn\n")
+    );
+
+    // Carve oss/ out with "use default".
+    env.run(&["rule", "add", &oss, "default"]);
+    assert_eq!(
+        env.run(&["which", &tool]),
+        format!("{tool} → rule {oss}/ (use default) → AmanKumarVerma11 (default)\n")
+    );
+
+    // Changing the default changes the carve-out; `which` with no path uses cwd.
+    assert_eq!(
+        env.run(&["default", "AMANNNSYN"]),
+        "default account: amannnsyn\n"
+    );
+    assert_eq!(
+        env.run_in("Code/Synthesys/oss/tool", &["which"]),
+        format!("{tool} → rule {oss}/ (use default) → amannnsyn (default)\n")
+    );
+
+    assert_eq!(
+        env.run(&["rule", "ls"]),
+        format!("{syn}/ → amannnsyn\n{oss}/ → default (amannnsyn)\n")
+    );
+
+    assert_eq!(env.run(&["rule", "rm", &oss]), format!("removed {oss}/\n"));
+    assert_eq!(env.run(&["rule", "ls"]), format!("{syn}/ → amannnsyn\n"));
+    assert_eq!(
+        env.run(&["which", "/"]),
+        "/ → no rule → amannnsyn (default)\n"
+    );
+}
+
+#[test]
+fn symlinks_and_case_resolve_to_the_same_rule() {
+    let env = Env::new();
+    symlink(env.home.join("Code"), env.home.join("CodeLink")).unwrap();
+    let syn = env.p("Code/Synthesys");
+
+    // A rule added through a symlink is stored as the real path.
+    assert_eq!(
+        env.run(&["rule", "add", "~/CodeLink/Synthesys", "amannnsyn"]),
+        format!("added {syn}/ → amannnsyn\n")
+    );
+    let real = env.run(&["which", "Code/Synthesys/oss/tool"]);
+    assert!(real.ends_with("→ amannnsyn\n"), "{real}");
+    let linked = env.run(&["which", "CodeLink/Synthesys/oss/tool"]);
+    assert_eq!(linked, real);
+
+    if cfg!(target_os = "macos") {
+        let cased = env.run(&["which", "code/SYNTHESYS/oss"]);
+        assert!(
+            cased.ends_with(&format!("rule {syn}/ → amannnsyn\n")),
+            "{cased}"
+        );
+    }
+
+    // A repo that doesn't exist yet (about to be cloned) still resolves.
+    let new = env.run(&["which", "CodeLink/Synthesys/not-cloned-yet"]);
+    assert_eq!(
+        new,
+        format!("{syn}/not-cloned-yet → rule {syn}/ → amannnsyn\n")
+    );
+}
+
+#[test]
+fn errors_are_explained() {
+    let env = Env::new();
+    let err = env.fail(&["rule", "add", "~/Code", "nobody"]);
+    assert!(
+        err.contains("unknown account nobody (known: AmanKumarVerma11, amannnsyn)"),
+        "{err}"
+    );
+
+    let err = env.fail(&["rule", "add", "~/Code/missing", "amannnsyn"]);
+    assert!(err.contains("is not a folder"), "{err}");
+
+    let err = env.fail(&["rule", "rm", "~/Code"]);
+    assert!(
+        err.contains(&format!("no rule for {}/", env.p("Code"))),
+        "{err}"
+    );
+
+    let err = env.fail(&["default", "nobody"]);
+    assert!(err.contains("unknown account nobody"), "{err}");
+}
+
+#[test]
+fn works_with_no_config_yet() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().canonicalize().unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_gitroute"))
+        .args(["which", path(&home)])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        format!("{} → no rule → no account (no default set)\n", path(&home))
+    );
+    let err = Command::new(env!("CARGO_BIN_EXE_gitroute"))
+        .args(["rule", "add", path(&home), "x"])
+        .env("HOME", &home)
+        .output()
+        .unwrap();
+    assert!(
+        String::from_utf8(err.stderr)
+            .unwrap()
+            .contains("no accounts added yet")
+    );
+    // Read-only commands don't create the config file.
+    assert!(!home.join("Library").exists());
+}

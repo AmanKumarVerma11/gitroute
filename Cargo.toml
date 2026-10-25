@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/gitroute-core",
+    "crates/git-credential-gitroute",
+    "crates/gitroute-cli",
+    "crates/gitroute-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+gitroute-core = { path = "crates/gitroute-core" }
