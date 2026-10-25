@@ -1,3 +1,10 @@
 /target
 .DS_Store
 /dist
+
+# Private working files: product brief, design notes and review captures,
+# engineering notes with personal setup details. Kept locally, never pushed.
+/PRODUCT.md
+/DESIGN.md
+/docs/NOTES.md
+/.impeccable/

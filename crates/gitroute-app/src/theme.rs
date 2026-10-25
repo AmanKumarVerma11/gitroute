@@ -330,7 +330,7 @@ fn style(p: &Palette, dark: bool) -> Style {
         state.weak_bg_fill = fill;
         state.bg_stroke = Stroke::new(1.0, Color32::TRANSPARENT);
         state.fg_stroke = Stroke::new(1.5, p.ink);
-        state.corner_radius = CornerRadius::same(8);
+        state.corner_radius = CornerRadius::same(10);
         state.expansion = 0.0;
     }
     w.hovered.bg_stroke = Stroke::new(1.0, p.hairline);
@@ -345,7 +345,7 @@ pub fn card(ui: &Ui) -> Frame {
     Frame::new()
         .fill(p.card)
         .stroke(Stroke::new(1.0, p.hairline))
-        .corner_radius(CornerRadius::same(12))
+        .corner_radius(CornerRadius::same(16))
         .inner_margin(Margin::same(18))
 }
 
@@ -355,7 +355,7 @@ pub fn primary_button(ui: &mut Ui, text: &str) -> Response {
     ui.add(
         Button::new(RichText::new(text).color(p.ground))
             .fill(p.ink)
-            .corner_radius(CornerRadius::same(8)),
+            .corner_radius(CornerRadius::same(10)),
     )
 }
 

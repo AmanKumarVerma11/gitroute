@@ -1,6 +1,7 @@
 //! gitroute menu bar app + settings window. Thin layer over gitroute-core.
 
 mod app;
+mod glass;
 mod login;
 mod theme;
 mod tray;
@@ -31,8 +32,16 @@ fn main() -> eframe::Result {
     };
 
     let options = eframe::NativeOptions {
+        // wgpu draws into its own Metal layer, which the glass can sit under.
+        renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()
             .with_title("gitroute")
+            // A transparent, full-height window: the glass sidebar runs to the
+            // top and the traffic lights sit inside it, as on macOS 26.
+            .with_transparent(true)
+            .with_fullsize_content_view(true)
+            .with_title_shown(false)
+            .with_titlebar_shown(false)
             .with_inner_size([940.0, 640.0])
             .with_min_inner_size([760.0, 480.0]),
         // Menu bar only: no Dock icon, even when run outside the .app bundle.
@@ -57,7 +66,10 @@ fn main() -> eframe::Result {
                 let _ = tx.send(event);
                 ctx.request_repaint();
             }));
-            Ok(Box::new(app::App::new(model, Some(tray), Some(rx))))
+            let glass = glass::Glass::install(cc);
+            Ok(Box::new(
+                app::App::new(model, Some(tray), Some(rx)).with_glass(glass),
+            ))
         }),
     )
 }

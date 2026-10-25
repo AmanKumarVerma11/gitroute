@@ -140,7 +140,7 @@ mod tests {
 
     #[test]
     fn commit_emails_are_verified_primary_first_with_noreply() {
-        let u = user(7, "amannnsyn", None);
+        let u = user(7, "mona-work", None);
         let emails = [
             email("other@example.com", false, true),
             email("unverified@example.com", false, false),
@@ -151,11 +151,11 @@ mod tests {
             [
                 "main@example.com",
                 "other@example.com",
-                "7+amannnsyn@users.noreply.github.com"
+                "7+mona-work@users.noreply.github.com"
             ]
         );
         // GitHub's own noreply entry isn't duplicated.
-        let emails = [email("7+amannnsyn@users.noreply.github.com", false, true)];
+        let emails = [email("7+mona-work@users.noreply.github.com", false, true)];
         assert_eq!(commit_emails(&u, &emails).len(), 1);
     }
 
@@ -163,7 +163,7 @@ mod tests {
     fn first_account_becomes_default_and_gets_token() {
         let (_tmp, store) = store();
         let mut config = Config::default();
-        let u = user(1, "AmanKumarVerma11", Some("Aman Kumar Verma"));
+        let u = user(1, "mona", Some("Mona Lisa Octocat"));
         let added = add(
             &mut config,
             &store,
@@ -177,7 +177,7 @@ mod tests {
         let a = config.account(1).unwrap();
         assert_eq!(
             (a.commit_name.as_str(), a.commit_email.as_str()),
-            ("Aman Kumar Verma", "a@x.com")
+            ("Mona Lisa Octocat", "a@x.com")
         );
         assert_eq!(stored(&store, 1).as_deref(), Some("gho_a"));
 
@@ -186,21 +186,21 @@ mod tests {
             &mut config,
             &store,
             &tok("gho_b"),
-            &user(2, "amannnsyn", Some(" ")),
+            &user(2, "mona-work", Some(" ")),
             &[],
         )
         .unwrap();
         assert_eq!(config.default_account_id, Some(1));
         let b = config.account(2).unwrap();
-        assert_eq!(b.commit_name, "amannnsyn");
-        assert_eq!(b.commit_email, "2+amannnsyn@users.noreply.github.com");
+        assert_eq!(b.commit_name, "mona-work");
+        assert_eq!(b.commit_email, "2+mona-work@users.noreply.github.com");
     }
 
     #[test]
     fn same_account_twice_is_rejected_unless_it_needs_relogin() {
         let (_tmp, store) = store();
         let mut config = Config::default();
-        let u = user(1, "AmanKumarVerma11", None);
+        let u = user(1, "mona", None);
         add(&mut config, &store, &tok("gho_old"), &u, &[]).unwrap();
 
         let err = add(&mut config, &store, &tok("gho_new"), &u, &[]).unwrap_err();

@@ -18,7 +18,7 @@ id = 1
 login = "personal"
 host = "github.com"
 avatar_url = ""
-commit_name = "Aman Kumar Verma"
+commit_name = "Mona Lisa Octocat"
 commit_email = "personal@example.com"
 
 [[accounts]]
@@ -26,7 +26,7 @@ id = 2
 login = "work"
 host = "github.com"
 avatar_url = ""
-commit_name = "Aman"
+commit_name = "Mona"
 commit_email = "work@example.com"
 "#;
 
@@ -342,7 +342,7 @@ fn rejected_tokens_flag_the_account_but_stale_ones_dont() {
     );
     assert!(
         s.gitroute(&["accounts"])
-            .contains("Aman <work@example.com>  ok")
+            .contains("Mona <work@example.com>  ok")
     );
 
     s.credential(
@@ -353,7 +353,7 @@ fn rejected_tokens_flag_the_account_but_stale_ones_dont() {
     );
     assert!(
         s.gitroute(&["accounts"])
-            .contains("Aman <work@example.com>  needs re-login")
+            .contains("Mona <work@example.com>  needs re-login")
     );
     let out = s.credential(
         "Code/Work/repo",
@@ -381,6 +381,6 @@ fn expired_token_without_refresh_flags_the_account() {
     assert_eq!(s.fill("Personal/repo"), None);
     assert!(
         s.gitroute(&["accounts"])
-            .contains("personal  Aman Kumar Verma <personal@example.com>  needs re-login")
+            .contains("personal  Mona Lisa Octocat <personal@example.com>  needs re-login")
     );
 }

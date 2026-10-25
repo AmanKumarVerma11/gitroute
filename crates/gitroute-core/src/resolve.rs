@@ -48,7 +48,7 @@ pub fn resolve<'a>(config: &'a Config, path: &Path) -> Resolution<'a> {
     }
 }
 
-/// `/x/y → rule /x/ → amannnsyn`
+/// `/x/y → rule /x/ → mona-work`
 impl fmt::Display for Resolution<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} → ", self.path.display())?;
@@ -91,10 +91,7 @@ mod tests {
     fn config(rules: &[(&str, Option<u64>)]) -> Config {
         let mut config = Config {
             default_account_id: Some(PERSONAL),
-            accounts: vec![
-                account(PERSONAL, "AmanKumarVerma11"),
-                account(WORK, "amannnsyn"),
-            ],
+            accounts: vec![account(PERSONAL, "mona"), account(WORK, "mona-work")],
             ..Config::default()
         };
         for (path, account) in rules {
@@ -112,8 +109,8 @@ mod tests {
     #[test]
     fn closest_rule_wins() {
         let c = config(&[("/c/syn", Some(WORK)), ("/c/syn/client", Some(PERSONAL))]);
-        assert_eq!(login(&c, "/c/syn/client/repo"), Some("AmanKumarVerma11"));
-        assert_eq!(login(&c, "/c/syn/other"), Some("amannnsyn"));
+        assert_eq!(login(&c, "/c/syn/client/repo"), Some("mona"));
+        assert_eq!(login(&c, "/c/syn/other"), Some("mona-work"));
     }
 
     #[test]
@@ -121,7 +118,7 @@ mod tests {
         let c = config(&[("/c/syn", Some(WORK))]);
         let r = resolve(&c, Path::new("/c/syn/oss/repo"));
         assert_eq!(r.rule.unwrap().path, Path::new("/c/syn"));
-        assert_eq!(r.account.unwrap().login, "amannnsyn");
+        assert_eq!(r.account.unwrap().login, "mona-work");
         assert!(!r.via_default());
     }
 
@@ -130,9 +127,9 @@ mod tests {
         let c = config(&[("/c/syn", Some(WORK)), ("/c/syn/oss", None)]);
         let r = resolve(&c, Path::new("/c/syn/oss/repo"));
         assert_eq!(r.rule.unwrap().path, Path::new("/c/syn/oss"));
-        assert_eq!(r.account.unwrap().login, "AmanKumarVerma11");
+        assert_eq!(r.account.unwrap().login, "mona");
         assert!(r.via_default());
-        assert_eq!(login(&c, "/c/syn/app"), Some("amannnsyn"));
+        assert_eq!(login(&c, "/c/syn/app"), Some("mona-work"));
     }
 
     #[test]
@@ -140,7 +137,7 @@ mod tests {
         let c = config(&[("/c/syn", Some(WORK))]);
         let r = resolve(&c, Path::new("/elsewhere/repo"));
         assert!(r.rule.is_none());
-        assert_eq!(r.account.unwrap().login, "AmanKumarVerma11");
+        assert_eq!(r.account.unwrap().login, "mona");
     }
 
     #[test]
@@ -156,27 +153,27 @@ mod tests {
     #[test]
     fn matches_on_component_boundaries() {
         let c = config(&[("/a/bar", Some(WORK))]);
-        assert_eq!(login(&c, "/a/bar"), Some("amannnsyn"));
-        assert_eq!(login(&c, "/a/bar/x"), Some("amannnsyn"));
-        assert_eq!(login(&c, "/a/barry"), Some("AmanKumarVerma11"));
-        assert_eq!(login(&c, "/a/barry/x"), Some("AmanKumarVerma11"));
+        assert_eq!(login(&c, "/a/bar"), Some("mona-work"));
+        assert_eq!(login(&c, "/a/bar/x"), Some("mona-work"));
+        assert_eq!(login(&c, "/a/barry"), Some("mona"));
+        assert_eq!(login(&c, "/a/barry/x"), Some("mona"));
     }
 
     #[test]
     fn trailing_slashes_dont_matter() {
         let c = config(&[("/a/bar/", Some(WORK))]);
-        assert_eq!(login(&c, "/a/bar"), Some("amannnsyn"));
-        assert_eq!(login(&c, "/a/bar/"), Some("amannnsyn"));
-        assert_eq!(login(&c, "/a/bar/x/"), Some("amannnsyn"));
+        assert_eq!(login(&c, "/a/bar"), Some("mona-work"));
+        assert_eq!(login(&c, "/a/bar/"), Some("mona-work"));
+        assert_eq!(login(&c, "/a/bar/x/"), Some("mona-work"));
     }
 
     #[cfg(target_os = "macos")]
     #[test]
     fn matching_ignores_case_on_macos() {
-        let c = config(&[("/Users/a/Desktop/Code/Synthesys", Some(WORK))]);
+        let c = config(&[("/Users/a/Desktop/Code/Acme", Some(WORK))]);
         assert_eq!(
-            login(&c, "/users/a/desktop/code/synthesys/app"),
-            Some("amannnsyn")
+            login(&c, "/users/a/desktop/code/acme/app"),
+            Some("mona-work")
         );
     }
 
@@ -192,12 +189,12 @@ mod tests {
     fn explains_the_decision() {
         let c = config(&[("/x", Some(WORK)), ("/x/oss", None), ("/gone", Some(99))]);
         let explain = |p: &str| resolve(&c, Path::new(p)).to_string();
-        assert_eq!(explain("/x/y"), "/x/y → rule /x/ → amannnsyn");
+        assert_eq!(explain("/x/y"), "/x/y → rule /x/ → mona-work");
         assert_eq!(
             explain("/x/oss/y"),
-            "/x/oss/y → rule /x/oss/ (use default) → AmanKumarVerma11 (default)"
+            "/x/oss/y → rule /x/oss/ (use default) → mona (default)"
         );
-        assert_eq!(explain("/z"), "/z → no rule → AmanKumarVerma11 (default)");
+        assert_eq!(explain("/z"), "/z → no rule → mona (default)");
         assert_eq!(
             explain("/gone/y"),
             "/gone/y → rule /gone/ → account 99, which isn't in the config"

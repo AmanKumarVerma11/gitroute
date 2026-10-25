@@ -23,6 +23,7 @@ use gitroute_core::token_store::{Access, TokenStore, unix_now};
 use gitroute_core::{paths, resolve};
 use tray_icon::menu::MenuEvent;
 
+use crate::glass::{self, Glass};
 use crate::login::{self, Login};
 use crate::theme;
 use crate::tray::{Action, Tray};
@@ -33,14 +34,24 @@ pub enum Tab {
     Rules,
     Check,
     Activity,
+    Setup,
 }
 
-const TABS: [(Tab, &str); 4] = [
+const TABS: [(Tab, &str); 5] = [
     (Tab::Accounts, "Accounts"),
     (Tab::Rules, "Folder rules"),
     (Tab::Check, "Check a path"),
     (Tab::Activity, "Activity"),
+    (Tab::Setup, "Setup"),
 ];
+
+/// How gitroute is connected to git.
+enum SetupState {
+    NotInstalled,
+    /// Installed, but git points at a helper other than this app's (the CLI's, say).
+    OtherHelper(Option<PathBuf>),
+    Installed,
+}
 
 /// The config and the files gitroute owns, kept in step.
 pub struct Model {
@@ -193,6 +204,9 @@ pub struct App {
     want_visible: bool,
     last_reload: Instant,
     themed: bool,
+    /// Native glass behind the sidebar; `None` in tests and on failure, where
+    /// the sidebar is painted solid instead.
+    glass: Option<Glass>,
 }
 
 impl App {
@@ -213,6 +227,23 @@ impl App {
             want_visible: false,
             last_reload: Instant::now(),
             themed: false,
+            glass: None,
+        }
+    }
+
+    pub fn with_glass(mut self, glass: Option<Glass>) -> App {
+        self.glass = glass;
+        self
+    }
+
+    fn setup_state(&self) -> SetupState {
+        if !self.model.installed {
+            return SetupState::NotInstalled;
+        }
+        let current = managed::current_helper(&self.model.home);
+        match &self.model.install_helper {
+            Some(ours) if current.as_ref() != Some(ours) => SetupState::OtherHelper(current),
+            _ => SetupState::Installed,
         }
     }
 
@@ -273,6 +304,9 @@ impl App {
         }
         if self.last_reload.elapsed() >= Duration::from_secs(1) {
             self.last_reload = Instant::now();
+            if let Some(glass) = &self.glass {
+                glass.keep_egui_on_top();
+            }
             match self.model.reload_if_changed() {
                 Ok(true) => self.config_changed(),
                 Ok(false) => {}
@@ -446,22 +480,43 @@ impl App {
         self.process();
         let ctx = ui.ctx().clone();
         let p = theme::palette(ui);
-        egui::Panel::left("sidebar")
+        // With glass, the sidebar is see-through: the native glass pane shows
+        // through it, and the window background is painted around the pane.
+        // The window's traffic lights sit inside the sidebar's top.
+        let fill = if self.glass.is_some() {
+            Color32::TRANSPARENT
+        } else {
+            p.sidebar
+        };
+        let sidebar = egui::Panel::left("sidebar")
             .resizable(false)
-            .exact_size(236.0)
+            .exact_size(glass::SIDEBAR_WIDTH)
             .show_separator_line(false)
-            .frame(Frame::new().fill(p.sidebar).inner_margin(Margin {
-                left: 18,
-                right: 16,
-                top: 22,
-                bottom: 16,
+            .frame(Frame::new().fill(fill).inner_margin(Margin {
+                left: 26,
+                right: 22,
+                top: 52,
+                bottom: 20,
             }))
             .show(ui, |ui| self.sidebar(ui));
+        if self.glass.is_some() {
+            let outer = sidebar.response.rect;
+            let hole = egui::Rect::from_min_max(
+                outer.min + vec2(glass::INSET, glass::INSET),
+                pos2(
+                    outer.left() + glass::SIDEBAR_WIDTH - glass::INSET,
+                    outer.bottom() - glass::INSET,
+                ),
+            );
+            paint_around(ui.painter(), outer, hole, glass::RADIUS, p.ground);
+        }
         egui::CentralPanel::default()
+            // Content starts below the title area, where clicks drag the
+            // window instead of reaching egui.
             .frame(Frame::new().fill(p.ground).inner_margin(Margin {
                 left: 36,
                 right: 28,
-                top: 28,
+                top: glass::TITLEBAR_HEIGHT as i8 + 8,
                 bottom: 16,
             }))
             .show(ui, |ui| {
@@ -473,6 +528,7 @@ impl App {
                         Tab::Rules => self.rules_tab(ui),
                         Tab::Check => self.check_tab(ui),
                         Tab::Activity => self.activity_tab(ui),
+                        Tab::Setup => self.setup_tab(ui),
                     }
                     ui.add_space(24.0);
                 });
@@ -480,34 +536,37 @@ impl App {
         self.dialogs(&ctx);
     }
 
-    /// Navigation drawn as a line with stations; the current page is the
-    /// filled station. Install status sits at the foot.
+    /// The wordmark, how gitroute is connected to git, and the navigation.
+    /// Nothing critical sits at the bottom, where windows get cut off.
     fn sidebar(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette(ui);
-        // Install status is pinned to the foot; navigation fills the rest.
-        egui::Panel::bottom("sidebar-foot")
-            .resizable(false)
-            .show_separator_line(false)
-            .frame(Frame::NONE)
-            .show(ui, |ui| {
-                theme::card(ui)
-                    .inner_margin(Margin::same(14))
-                    .show(ui, |ui| self.install_status(ui));
-            });
-        egui::CentralPanel::default()
-            .frame(Frame::NONE)
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    theme::mark(ui, 22.0);
-                    ui.label(
-                        RichText::new("gitroute")
-                            .text_style(theme::title())
-                            .color(p.ink),
-                    );
-                });
-                ui.add_space(26.0);
-                self.nav(ui);
-            });
+        ui.horizontal(|ui| {
+            theme::mark(ui, 22.0);
+            ui.label(
+                RichText::new("gitroute")
+                    .text_style(theme::title())
+                    .color(p.ink),
+            );
+        });
+        ui.add_space(6.0);
+        let (color, text) = match self.setup_state() {
+            SetupState::Installed => (p.ok, "Connected to git"),
+            SetupState::OtherHelper(_) => (p.warn, "Check setup"),
+            SetupState::NotInstalled => (p.warn, "Not connected to git"),
+        };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().button_padding = vec2(4.0, 2.0);
+            ui.add_space(4.0);
+            theme::dot(ui, color);
+            let link = Button::new(RichText::new(text).small().color(p.ink_soft))
+                .frame_when_inactive(false);
+            if ui.add(link).on_hover_text("Open Setup").clicked() {
+                self.tab = Tab::Setup;
+            }
+        });
+        ui.add_space(22.0);
+        self.nav(ui);
     }
 
     /// Navigation drawn as a line with stations; the current page is the
@@ -528,16 +587,19 @@ impl App {
             }
             let (x, cy) = (rect.left() + 12.0, rect.center().y);
             let rail = Stroke::new(3.0, p.ink_faint);
+            // The rail stops at each ring, so stations read as hollow on
+            // glass as well as on a solid sidebar.
+            let r = if selected { 7.5 } else { 6.75 };
             if i > 0 {
-                painter.line_segment([pos2(x, rect.top()), pos2(x, cy)], rail);
+                painter.line_segment([pos2(x, rect.top()), pos2(x, cy - r)], rail);
             }
             if i + 1 < count {
-                painter.line_segment([pos2(x, cy), pos2(x, rect.bottom())], rail);
+                painter.line_segment([pos2(x, cy + r), pos2(x, rect.bottom())], rail);
             }
             if selected {
-                painter.circle(pos2(x, cy), 7.5, p.ink, Stroke::new(3.0, p.sidebar));
+                painter.circle_filled(pos2(x, cy), 7.5, p.ink);
             } else {
-                painter.circle(pos2(x, cy), 5.5, p.sidebar, Stroke::new(2.5, p.ink_faint));
+                painter.circle_stroke(pos2(x, cy), 5.5, Stroke::new(2.5, p.ink_faint));
             }
             let font = if selected {
                 FontId::new(14.5, theme::medium())
@@ -555,19 +617,27 @@ impl App {
         }
     }
 
+    fn setup_tab(&mut self, ui: &mut egui::Ui) {
+        page_header(
+            ui,
+            "Setup",
+            "How gitroute is connected to git on this Mac.",
+            None,
+        );
+        theme::card(ui).show(ui, |ui| self.install_status(ui));
+    }
+
     fn install_status(&mut self, ui: &mut egui::Ui) {
         let p = theme::palette(ui);
         ui.set_width(ui.available_width());
-        let installed = self.model.installed;
+        let state = self.setup_state();
+        let installed = !matches!(state, SetupState::NotInstalled);
         // Installed from elsewhere (e.g. the CLI) with a different helper is
         // a problem state, so it reads as one.
-        let current = managed::current_helper(&self.model.home);
-        let foreign = installed
-            && self
-                .model
-                .install_helper
-                .as_ref()
-                .is_some_and(|ours| current.as_ref() != Some(ours));
+        let (foreign, current) = match state {
+            SetupState::OtherHelper(current) => (true, current),
+            _ => (false, None),
+        };
         let (color, title) = match (installed, foreign) {
             (false, _) => (p.warn, "Not installed"),
             (true, true) => (p.warn, "Installed, but git uses another helper"),
@@ -1547,6 +1617,12 @@ impl App {
 }
 
 impl eframe::App for App {
+    /// Transparent, so the native glass shows through the sidebar; every
+    /// other region is painted by egui.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0; 4]
+    }
+
     /// Runs before every frame, and while the window is hidden.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.process();
@@ -1573,6 +1649,59 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.draw(ui);
     }
+}
+
+/// Paints `color` over `outer` except a rounded `hole`: the window
+/// background around the floating glass sidebar.
+fn paint_around(
+    painter: &egui::Painter,
+    outer: egui::Rect,
+    hole: egui::Rect,
+    radius: f32,
+    color: Color32,
+) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    for band in [
+        egui::Rect::from_min_max(outer.min, pos2(outer.right(), hole.top())),
+        egui::Rect::from_min_max(pos2(outer.left(), hole.bottom()), outer.max),
+        egui::Rect::from_min_max(
+            pos2(outer.left(), hole.top()),
+            pos2(hole.left(), hole.bottom()),
+        ),
+        egui::Rect::from_min_max(
+            pos2(hole.right(), hole.top()),
+            pos2(outer.right(), hole.bottom()),
+        ),
+    ] {
+        painter.rect_filled(band, 0.0, color);
+    }
+    // Each corner: the square minus a quarter circle, as a triangle fan.
+    let r = radius;
+    let mut mesh = egui::Mesh::default();
+    for (corner, center, start) in [
+        (hole.left_top(), hole.left_top() + vec2(r, r), PI),
+        (hole.right_top(), hole.right_top() + vec2(-r, r), 1.5 * PI),
+        (hole.right_bottom(), hole.right_bottom() + vec2(-r, -r), 0.0),
+        (
+            hole.left_bottom(),
+            hole.left_bottom() + vec2(r, -r),
+            FRAC_PI_2,
+        ),
+    ] {
+        let base = mesh.vertices.len() as u32;
+        mesh.colored_vertex(corner, color);
+        const STEPS: u32 = 16;
+        for i in 0..=STEPS {
+            let angle = start + i as f32 / STEPS as f32 * FRAC_PI_2;
+            mesh.colored_vertex(center + vec2(angle.cos(), angle.sin()) * r, color);
+        }
+        for i in 0..STEPS {
+            mesh.add_triangle(base, base + 1 + i, base + 2 + i);
+        }
+    }
+    painter.add(mesh);
+    // An anti-aliased edge over the fans' hard one.
+    painter.rect_stroke(hole, r, Stroke::new(1.0, color), egui::StrokeKind::Outside);
 }
 
 /// The page title, its one-line intro, and optionally the page's main action
@@ -1659,14 +1788,14 @@ fn account_line(
     }
 }
 
-/// `Synthesys/` for `/x/Synthesys`.
+/// `Acme/` for `/x/Acme`.
 fn folder_name(path: &Path) -> String {
     path.file_name()
         .map_or("/".to_string(), |n| format!("{}/", n.to_string_lossy()))
 }
 
 /// Shortens a path to about `max` characters on `/` boundaries:
-/// `/Users/aman/…/bin/git-credential-gitroute`. Keeps whole trailing
+/// `/Users/mona/…/bin/git-credential-gitroute`. Keeps whole trailing
 /// components first (they tell paths apart), then leading ones; a single
 /// component too long to fit is cut in its middle.
 fn shorten_path(path: &str, max: usize) -> String {
@@ -1683,8 +1812,10 @@ fn shorten_path(path: &str, max: usize) -> String {
         tail.insert(0, part);
     }
     let rest = &parts[..parts.len() - tail.len()];
-    let mut head: Vec<&str> = Vec::new();
-    for part in rest {
+    // Always keep the first component (`~` or the root), so a shortened
+    // home path never reads as an absolute one.
+    let mut head: Vec<&str> = rest.first().copied().into_iter().collect();
+    for part in rest.iter().skip(1) {
         if len(&head) + part.chars().count() + 2 + len(&tail) > max {
             break;
         }

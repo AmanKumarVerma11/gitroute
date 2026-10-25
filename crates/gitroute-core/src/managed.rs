@@ -355,8 +355,8 @@ mod tests {
         let mut config = Config {
             default_account_id: Some(1),
             accounts: vec![
-                account(1, "personal", "Aman Kumar Verma", "p@example.com"),
-                account(2, "work", "Aman", "w@example.com"),
+                account(1, "personal", "Mona Lisa Octocat", "p@example.com"),
+                account(2, "work", "Mona", "w@example.com"),
             ],
             ..Config::default()
         };
@@ -373,7 +373,7 @@ mod tests {
             text,
             format!(
                 "{HEADER}\n\
-                 [user]\n\tname = \"Aman Kumar Verma\"\n\temail = \"p@example.com\"\n\
+                 [user]\n\tname = \"Mona Lisa Octocat\"\n\temail = \"p@example.com\"\n\
                  \n[credential \"https://github.com\"]\n\
                  \t# Empty first: drops helpers set earlier for github.com, such as Apple's osxkeychain.\n\
                  \thelper =\n\thelper = \"/bin/git-credential-gitroute\"\n\
@@ -482,7 +482,7 @@ mod tests {
         write_files(&c, home, Path::new("/b/h")).unwrap();
         assert_eq!(
             fs::read_to_string(identity_path(home, 2)).unwrap(),
-            format!("{HEADER}[user]\n\tname = \"Aman\"\n\temail = \"w@example.com\"\n")
+            format!("{HEADER}[user]\n\tname = \"Mona\"\n\temail = \"w@example.com\"\n")
         );
         c.accounts.retain(|a| a.id != 2);
         write_files(&c, home, Path::new("/b/h")).unwrap();

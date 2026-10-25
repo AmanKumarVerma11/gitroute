@@ -11,19 +11,19 @@ default_account_id = 1
 
 [[accounts]]
 id = 1
-login = "AmanKumarVerma11"
+login = "mona"
 host = "github.com"
 avatar_url = ""
-commit_name = "Aman"
-commit_email = "1+AmanKumarVerma11@users.noreply.github.com"
+commit_name = "Mona"
+commit_email = "1+mona@users.noreply.github.com"
 
 [[accounts]]
 id = 2
-login = "amannnsyn"
+login = "mona-work"
 host = "github.com"
 avatar_url = ""
-commit_name = "Aman"
-commit_email = "aman@example.com"
+commit_name = "Mona"
+commit_email = "mona@acme.example"
 "#;
 
 struct Env {
@@ -38,7 +38,7 @@ impl Env {
         let config = home.join("Library/Application Support/gitroute/config.toml");
         fs::create_dir_all(config.parent().unwrap()).unwrap();
         fs::write(config, CONFIG).unwrap();
-        fs::create_dir_all(home.join("Code/Synthesys/oss/tool")).unwrap();
+        fs::create_dir_all(home.join("Code/Acme/oss/tool")).unwrap();
         Env { _tmp: tmp, home }
     }
 
@@ -99,17 +99,17 @@ fn accounts_and_logout() {
 
     assert_eq!(
         env.run(&["accounts"]),
-        "* AmanKumarVerma11  Aman <1+AmanKumarVerma11@users.noreply.github.com>  ok\n  \
-         amannnsyn  Aman <aman@example.com>  ok\n"
+        "* mona  Mona <1+mona@users.noreply.github.com>  ok\n  \
+         mona-work  Mona <mona@acme.example>  ok\n"
     );
 
-    let syn = env.p("Code/Synthesys");
-    env.run(&["rule", "add", &syn, "amannnsyn"]);
+    let syn = env.p("Code/Acme");
+    env.run(&["rule", "add", &syn, "mona-work"]);
     assert_eq!(
-        env.run(&["logout", "amannnsyn"]),
+        env.run(&["logout", "mona-work"]),
         format!(
-            "removed amannnsyn and its token\nrule {syn}/ still points at amannnsyn; \
-             it resolves to nothing until amannnsyn is added again\n"
+            "removed mona-work and its token\nrule {syn}/ still points at mona-work; \
+             it resolves to nothing until mona-work is added again\n"
         )
     );
     let tokens = fs::read_to_string(env.tokens()).unwrap();
@@ -135,10 +135,7 @@ fn accounts_and_logout() {
         "{out}"
     );
     assert!(env.run(&["accounts"]).ends_with("  needs re-login\n"));
-    assert_eq!(
-        env.run(&["logout", "AmanKumarVerma11"]),
-        "removed AmanKumarVerma11 and its token\n"
-    );
+    assert_eq!(env.run(&["logout", "mona"]), "removed mona and its token\n");
     assert_eq!(
         env.run(&["accounts"]),
         "no accounts; add one with `gitroute login`\n"
@@ -153,50 +150,50 @@ fn path(p: &Path) -> &str {
 fn rules_default_and_which() {
     let env = Env::new();
     let (syn, oss, tool) = (
-        env.p("Code/Synthesys"),
-        env.p("Code/Synthesys/oss"),
-        env.p("Code/Synthesys/oss/tool"),
+        env.p("Code/Acme"),
+        env.p("Code/Acme/oss"),
+        env.p("Code/Acme/oss/tool"),
     );
 
     assert_eq!(env.run(&["rule", "ls"]), "no rules\n");
 
-    // The brief's example: oss/ has no rule, so it inherits work from Synthesys/.
+    // The brief's example: oss/ has no rule, so it inherits work from Acme/.
     assert_eq!(
-        env.run(&["rule", "add", "~/Code/Synthesys/", "amannnsyn"]),
-        format!("added {syn}/ → amannnsyn\n")
+        env.run(&["rule", "add", "~/Code/Acme/", "mona-work"]),
+        format!("added {syn}/ → mona-work\n")
     );
     assert_eq!(
-        env.run(&["which", "Code/Synthesys/oss/tool"]),
-        format!("{tool} → rule {syn}/ → amannnsyn\n")
+        env.run(&["which", "Code/Acme/oss/tool"]),
+        format!("{tool} → rule {syn}/ → mona-work\n")
     );
 
     // Carve oss/ out with "use default".
     env.run(&["rule", "add", &oss, "default"]);
     assert_eq!(
         env.run(&["which", &tool]),
-        format!("{tool} → rule {oss}/ (use default) → AmanKumarVerma11 (default)\n")
+        format!("{tool} → rule {oss}/ (use default) → mona (default)\n")
     );
 
     // Changing the default changes the carve-out; `which` with no path uses cwd.
     assert_eq!(
-        env.run(&["default", "AMANNNSYN"]),
-        "default account: amannnsyn\n"
+        env.run(&["default", "MONA-WORK"]),
+        "default account: mona-work\n"
     );
     assert_eq!(
-        env.run_in("Code/Synthesys/oss/tool", &["which"]),
-        format!("{tool} → rule {oss}/ (use default) → amannnsyn (default)\n")
+        env.run_in("Code/Acme/oss/tool", &["which"]),
+        format!("{tool} → rule {oss}/ (use default) → mona-work (default)\n")
     );
 
     assert_eq!(
         env.run(&["rule", "ls"]),
-        format!("{syn}/ → amannnsyn\n{oss}/ → default (amannnsyn)\n")
+        format!("{syn}/ → mona-work\n{oss}/ → default (mona-work)\n")
     );
 
     assert_eq!(env.run(&["rule", "rm", &oss]), format!("removed {oss}/\n"));
-    assert_eq!(env.run(&["rule", "ls"]), format!("{syn}/ → amannnsyn\n"));
+    assert_eq!(env.run(&["rule", "ls"]), format!("{syn}/ → mona-work\n"));
     assert_eq!(
         env.run(&["which", "/"]),
-        "/ → no rule → amannnsyn (default)\n"
+        "/ → no rule → mona-work (default)\n"
     );
 }
 
@@ -204,31 +201,31 @@ fn rules_default_and_which() {
 fn symlinks_and_case_resolve_to_the_same_rule() {
     let env = Env::new();
     symlink(env.home.join("Code"), env.home.join("CodeLink")).unwrap();
-    let syn = env.p("Code/Synthesys");
+    let syn = env.p("Code/Acme");
 
     // A rule added through a symlink is stored as the real path.
     assert_eq!(
-        env.run(&["rule", "add", "~/CodeLink/Synthesys", "amannnsyn"]),
-        format!("added {syn}/ → amannnsyn\n")
+        env.run(&["rule", "add", "~/CodeLink/Acme", "mona-work"]),
+        format!("added {syn}/ → mona-work\n")
     );
-    let real = env.run(&["which", "Code/Synthesys/oss/tool"]);
-    assert!(real.ends_with("→ amannnsyn\n"), "{real}");
-    let linked = env.run(&["which", "CodeLink/Synthesys/oss/tool"]);
+    let real = env.run(&["which", "Code/Acme/oss/tool"]);
+    assert!(real.ends_with("→ mona-work\n"), "{real}");
+    let linked = env.run(&["which", "CodeLink/Acme/oss/tool"]);
     assert_eq!(linked, real);
 
     if cfg!(target_os = "macos") {
-        let cased = env.run(&["which", "code/SYNTHESYS/oss"]);
+        let cased = env.run(&["which", "code/ACME/oss"]);
         assert!(
-            cased.ends_with(&format!("rule {syn}/ → amannnsyn\n")),
+            cased.ends_with(&format!("rule {syn}/ → mona-work\n")),
             "{cased}"
         );
     }
 
     // A repo that doesn't exist yet (about to be cloned) still resolves.
-    let new = env.run(&["which", "CodeLink/Synthesys/not-cloned-yet"]);
+    let new = env.run(&["which", "CodeLink/Acme/not-cloned-yet"]);
     assert_eq!(
         new,
-        format!("{syn}/not-cloned-yet → rule {syn}/ → amannnsyn\n")
+        format!("{syn}/not-cloned-yet → rule {syn}/ → mona-work\n")
     );
 }
 
@@ -237,11 +234,11 @@ fn errors_are_explained() {
     let env = Env::new();
     let err = env.fail(&["rule", "add", "~/Code", "nobody"]);
     assert!(
-        err.contains("unknown account nobody (known: AmanKumarVerma11, amannnsyn)"),
+        err.contains("unknown account nobody (known: mona, mona-work)"),
         "{err}"
     );
 
-    let err = env.fail(&["rule", "add", "~/Code/missing", "amannnsyn"]);
+    let err = env.fail(&["rule", "add", "~/Code/missing", "mona-work"]);
     assert!(err.contains("is not a folder"), "{err}");
 
     let err = env.fail(&["rule", "rm", "~/Code"]);

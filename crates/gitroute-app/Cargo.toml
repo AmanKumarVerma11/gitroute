@@ -6,8 +6,12 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-eframe = "0.37.0"
+eframe = { version = "0.37.0", features = ["wgpu"] }
 gitroute-core.workspace = true
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSView", "NSResponder", "NSWindow", "NSGlassEffectView", "NSVisualEffectView", "objc2-core-foundation", "NSToolbar", "NSButton", "NSControl"] }
+objc2-foundation = { version = "0.3", features = ["NSGeometry"] }
+raw-window-handle = "0.6"
 rfd = "0.17.2"
 tray-icon = "0.26.1"
 winit = "0.30"

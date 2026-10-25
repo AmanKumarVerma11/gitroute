@@ -137,6 +137,9 @@ fn rules_and_check_tabs() {
 fn install_and_uninstall_through_the_diff_dialog() {
     let f = Fixture::new(false);
     let mut h = f.harness();
+    h.get_by_label("Not connected to git");
+    h.get_by_label("Setup").click();
+    h.run();
     h.get_by_label("Not installed");
 
     h.get_by_label("Install…").click();
@@ -160,8 +163,11 @@ fn install_and_uninstall_through_the_diff_dialog() {
     assert!(f.read(".config/gitroute/gitconfig").contains("Code/Work/"));
     h.get_by_label("Installed");
     h.get_by_label_contains("Installed: git now asks gitroute");
+    h.get_by_label("Connected to git");
 
     // Changes after install regenerate the files git reads.
+    h.get_by_label("Accounts").click();
+    h.run();
     h.get_by_label("Make default").click();
     h.run();
     assert!(
@@ -169,6 +175,8 @@ fn install_and_uninstall_through_the_diff_dialog() {
             .contains("w@example.com")
     );
 
+    h.get_by_label("Setup").click();
+    h.run();
     h.get_by_label("Uninstall…").click();
     h.run();
     h.get_by_label("Uninstall").click();
@@ -188,6 +196,9 @@ fn install_when_already_installed_switches_to_the_apps_helper() {
     )
     .unwrap();
     let mut h = f.harness();
+    // The sidebar flags it on every page; Setup has the fix.
+    h.get_by_label("Check setup").click();
+    h.run();
     h.get_by_label("Installed, but git uses another helper");
     h.get_by_label("Uninstall…");
     // The config records no helper, and helper_for falls back to the one
@@ -350,12 +361,12 @@ fn activity_shows_helper_decisions() {
 #[test]
 fn middle_truncate_keeps_both_ends() {
     assert_eq!(
-        middle_truncate("~/Desktop/Code/Synthesys/oss/", 100),
-        "~/Desktop/Code/Synthesys/oss/"
+        middle_truncate("~/Desktop/Code/Acme/oss/", 100),
+        "~/Desktop/Code/Acme/oss/"
     );
     assert_eq!(
-        middle_truncate("~/Desktop/Code/Synthesys/oss/", 15),
-        "~/Desk…sys/oss/"
+        middle_truncate("~/Desktop/Code/Acme/oss/", 15),
+        "~/Desk…cme/oss/"
     );
     assert_eq!(middle_truncate("abcdefgh", 5), "a…fgh");
 }
@@ -364,21 +375,21 @@ fn middle_truncate_keeps_both_ends() {
 fn shorten_path_cuts_on_slashes_and_keeps_the_end() {
     assert_eq!(shorten_path("~/Code/oss/", 30), "~/Code/oss/");
     assert_eq!(
-        shorten_path("/Users/aman/.cargo/bin/git-credential-gitroute", 30),
+        shorten_path("/Users/mona/.cargo/bin/git-credential-gitroute", 30),
         "/…/bin/git-credential-gitroute"
     );
     assert_eq!(shorten_path("~/.cargo/bin", 18), "~/.cargo/bin");
     assert_eq!(
-        shorten_path("/Users/aman/.cargo/bin", 18),
-        "/…/aman/.cargo/bin"
+        shorten_path("/Users/mona/.cargo/bin", 18),
+        "/…/mona/.cargo/bin"
     );
     assert_eq!(
         shorten_path("/Applications/gitroute.app/Contents/MacOS", 18),
         "/…/Contents/MacOS"
     );
     assert_eq!(
-        shorten_path("~/Desktop/Code/Synthesys/synthesys-backend/", 32),
-        "~/…/Synthesys/synthesys-backend/"
+        shorten_path("~/Desktop/Code/Acme/acme-api/", 22),
+        "~/…/Code/Acme/acme-api/"
     );
 }
 
@@ -398,9 +409,9 @@ fn render_screens() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().canonicalize().unwrap();
     for dir in [
-        "Desktop/Code/Aman/indiabites",
-        "Desktop/Code/Synthesys/synthesys-backend",
-        "Desktop/Code/Synthesys/oss",
+        "Desktop/Code/Personal/side-project",
+        "Desktop/Code/Acme/acme-api",
+        "Desktop/Code/Acme/oss",
         "bin",
     ] {
         fs::create_dir_all(home.join(dir)).unwrap();
@@ -419,74 +430,59 @@ fn render_screens() {
         &config,
         format!(
             r#"version = 1
-default_account_id = 93284136
+default_account_id = 1001
 
 [[accounts]]
-id = 93284136
-login = "AmanKumarVerma11"
+id = 1001
+login = "mona"
 host = "github.com"
 avatar_url = ""
-commit_name = "Aman Kumar Verma"
-commit_email = "akverma11aug2002@gmail.com"
-emails = ["akverma11aug2002@gmail.com", "93284136+AmanKumarVerma11@users.noreply.github.com"]
+commit_name = "Mona Lisa Octocat"
+commit_email = "mona@example.com"
+emails = ["mona@example.com", "1001+mona@users.noreply.github.com"]
 
 [[accounts]]
-id = 345829660
-login = "amannnsyn"
+id = 2002
+login = "mona-work"
 host = "github.com"
 avatar_url = ""
-commit_name = "Aman"
-commit_email = "aman@synthesys.app"
+commit_name = "Mona"
+commit_email = "mona@acme.example"
 
 [[rules]]
-path = "{aman}"
-account = 93284136
+path = "{personal}"
+account = 1001
 
 [[rules]]
 path = "{syn}"
-account = 345829660
+account = 2002
 
 [[rules]]
 path = "{oss}"
 "#,
-            aman = code.join("Aman").display(),
-            syn = code.join("Synthesys").display(),
-            oss = code.join("Synthesys/oss").display(),
+            personal = code.join("Personal").display(),
+            syn = code.join("Acme").display(),
+            oss = code.join("Acme/oss").display(),
         ),
     )
     .unwrap();
     gitroute_core::managed::write_files(
         &Config::load(&config).unwrap(),
         &home,
-        Path::new("/Users/aman/.cargo/bin/git-credential-gitroute"),
+        Path::new("/Users/mona/.cargo/bin/git-credential-gitroute"),
     )
     .unwrap();
     for (ago, repo, account, outcome) in [
         // Oldest first, as the helper appends them.
-        (
-            9_000,
-            "Aman/indiabites/.git",
-            "AmanKumarVerma11",
-            "token sent",
-        ),
+        (9_000, "Personal/side-project/.git", "mona", "token sent"),
         (
             2_000,
-            "Synthesys/synthesys-backend/.git",
-            "amannnsyn",
+            "Acme/acme-api/.git",
+            "mona-work",
             "token sent (refreshed first)",
         ),
-        (
-            300,
-            "Aman/indiabites/.git",
-            "AmanKumarVerma11",
-            "token sent",
-        ),
-        (
-            40,
-            "Synthesys/synthesys-backend/.git",
-            "amannnsyn",
-            "token sent",
-        ),
+        (300, "Personal/side-project/.git", "mona", "token sent"),
+        (40, "Acme/acme-api/.git", "mona-work", "token sent"),
     ] {
         helper_log::append(
             &home,
@@ -506,7 +502,8 @@ path = "{oss}"
 
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/screens");
     fs::create_dir_all(&out).unwrap();
-    let shots: [(&str, Tab, u8); 6] = [
+    let shots: [(&str, Tab, u8); 7] = [
+        ("setup", Tab::Setup, 0),
         ("accounts", Tab::Accounts, 0),
         ("login", Tab::Accounts, 1),
         ("rules", Tab::Rules, 0),
@@ -525,7 +522,7 @@ path = "{oss}"
             .unwrap();
             let mut app = App::new(model, None, None);
             app.tab = tab;
-            app.check_input = "~/Desktop/Code/Synthesys/synthesys-backend".into();
+            app.check_input = "~/Desktop/Code/Acme/acme-api".into();
             let (tx, rx) = mpsc::channel();
             if extra == 1 {
                 app.login = Some(Login::from_channel(rx, Arc::new(AtomicBool::new(false))));

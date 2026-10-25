@@ -349,7 +349,7 @@ fn find_account<'a>(config: &'a Config, login: &str) -> Result<&'a Account> {
     })
 }
 
-/// What a rule points at: `amannnsyn`, or `default (AmanKumarVerma11)`.
+/// What a rule points at: `mona-work`, or `default (mona)`.
 fn target_label(config: &Config, account: Option<u64>) -> String {
     match account {
         Some(id) => match config.account(id) {

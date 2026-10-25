@@ -245,10 +245,10 @@ mod tests {
     #[test]
     fn logins_match_case_insensitively() {
         let config = Config {
-            accounts: vec![account(1, "AmanKumarVerma11")],
+            accounts: vec![account(1, "mona")],
             ..Config::default()
         };
-        assert_eq!(config.account_by_login("amankumarverma11").unwrap().id, 1);
+        assert_eq!(config.account_by_login("MONA").unwrap().id, 1);
         assert!(config.account_by_login("someone").is_none());
     }
 }
