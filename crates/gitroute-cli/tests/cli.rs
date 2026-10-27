@@ -278,3 +278,46 @@ fn works_with_no_config_yet() {
     // Read-only commands don't create the config file.
     assert!(!home.join("Library").exists());
 }
+
+#[test]
+fn status_and_doctor() {
+    let env = Env::new();
+    let acme = env.p("Code/Acme");
+    env.run(&["rule", "add", &acme, "mona-work"]);
+    fs::create_dir_all(env.home.join("Code/Acme/api/.git")).unwrap();
+    fs::create_dir_all(env.home.join("Code/Acme/web/.git")).unwrap();
+    assert_eq!(
+        env.run(&["status"]),
+        format!(
+            "not installed: run `gitroute install`\n\n\
+             accounts:\n\
+             * mona  Mona <1+mona@users.noreply.github.com>\n  \
+             mona-work  Mona <mona@acme.example>\n\n\
+             rules:\n  {acme}/ → mona-work  (2 repos)\n\n\
+             recent:\n  nothing yet\n"
+        )
+    );
+
+    // A hand-written includeIf that sends HTTPS remotes over SSH.
+    fs::write(
+        env.home.join(".gitconfig"),
+        "[includeIf \"gitdir:~/Code/Acme/\"]\n\tpath = ~/.gitconfig-acme\n",
+    )
+    .unwrap();
+    fs::write(
+        env.home.join(".gitconfig-acme"),
+        "[url \"git@github.com:\"]\n\tinsteadOf = https://github.com/\n",
+    )
+    .unwrap();
+    let out = env.output("", &["doctor"]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = String::from_utf8(out.stdout).unwrap();
+    for expected in [
+        "warn  git doesn't ask gitroute yet\n",
+        "note  Your own includeIf for gitdir:~/Code/Acme/\n      In ~/.gitconfig, includes ~/.gitconfig-acme. Overlaps the rule for ~/Code/Acme/.\n",
+        "warn  HTTPS remotes on github.com go over SSH in folders matching gitdir:~/Code/Acme/\n",
+        "\n2 to look at\n",
+    ] {
+        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
+    }
+}

@@ -67,6 +67,22 @@ pub fn read_recent(home: &Path, limit: usize) -> Result<Vec<Entry>> {
         .collect())
 }
 
+/// "12 s ago", "5 min ago", "3 h ago", "2 d ago".
+pub fn ago(now: u64, then: u64) -> String {
+    let secs = now.saturating_sub(then);
+    match secs {
+        0..60 => format!("{secs} s ago"),
+        60..3600 => format!("{} min ago", secs / 60),
+        3600..86_400 => format!("{} h ago", secs / 3600),
+        _ => format!("{} d ago", secs / 86_400),
+    }
+}
+
+/// The repo an entry was about: its path without the trailing `/.git`.
+pub fn repo(entry: &Entry) -> &str {
+    entry.path.strip_suffix("/.git").unwrap_or(&entry.path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -82,6 +98,15 @@ mod tests {
             account: Some("work".into()),
             outcome: outcome.into(),
         }
+    }
+
+    #[test]
+    fn ages_and_repos() {
+        assert_eq!(ago(100, 100), "0 s ago");
+        assert_eq!(ago(100, 41), "59 s ago");
+        assert_eq!(ago(4000, 0), "1 h ago");
+        assert_eq!(ago(200_000, 0), "2 d ago");
+        assert_eq!(repo(&entry("x")), "/r");
     }
 
     #[test]

@@ -73,6 +73,15 @@ pub fn display_dir(path: &Path) -> String {
     if s.ends_with('/') { s } else { s + "/" }
 }
 
+/// `~/x` for paths under `home`, otherwise the path as is.
+pub fn tilde(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

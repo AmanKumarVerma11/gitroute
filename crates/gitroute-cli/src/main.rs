@@ -1,4 +1,4 @@
-//! `gitroute` CLI: accounts, rules, `which`, `install`.
+//! `gitroute` CLI: accounts, rules, `which`, `status`, `doctor`, `install`.
 
 use std::env;
 use std::io::{self, IsTerminal, Write};
@@ -10,9 +10,10 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 use gitroute_core::accounts::{self, Added};
 use gitroute_core::config::{Account, Config, config_path, lock_dir};
+use gitroute_core::doctor::{self, Level};
 use gitroute_core::managed::{self, Change};
 use gitroute_core::token_store::{Access, TokenStore, unix_now};
-use gitroute_core::{github, paths, resolve};
+use gitroute_core::{github, helper_log, paths, repos, resolve};
 
 #[derive(Parser)]
 #[command(
@@ -43,6 +44,10 @@ enum Command {
         /// Defaults to the current directory
         path: Option<PathBuf>,
     },
+    /// Show whether gitroute is installed, the accounts, rules, and recent decisions
+    Status,
+    /// Check the setup, and list git settings outside gitroute that affect it
+    Doctor,
     /// Hook gitroute into git: add an include block at the end of your global gitconfig
     Install {
         /// Apply the change without asking
@@ -192,6 +197,24 @@ fn main() -> Result<()> {
             let path = normalize(path.as_deref().unwrap_or(&cwd))?;
             println!("{}", resolve::resolve(&config, &path));
         }
+        Command::Status => status(&config, &home),
+        Command::Doctor => {
+            let findings = doctor::run(&config, &home, &managed::global_gitconfig(&home));
+            for f in &findings {
+                let level = match f.level {
+                    Level::Ok => "ok",
+                    Level::Note => "note",
+                    Level::Warn => "warn",
+                };
+                println!("{level:<5} {}\n      {}", f.title, f.detail);
+            }
+            let warnings = findings.iter().filter(|f| f.level == Level::Warn).count();
+            if warnings > 0 {
+                println!("\n{warnings} to look at");
+                process::exit(1);
+            }
+            println!("\neverything looks right");
+        }
         Command::Install { yes } => {
             // Installing points git at the helper next to this binary.
             config.helper_path = Some(managed::helper_next_to_current_exe()?);
@@ -207,6 +230,78 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Setup, accounts, rules with the repos they cover, and recent decisions.
+/// Reads only: no network, no Keychain.
+fn status(config: &Config, home: &Path) {
+    let global = managed::global_gitconfig(home);
+    match managed::is_installed(&global) {
+        Ok(true) => {
+            let helper = managed::current_helper(home)
+                .map_or("no helper set".to_string(), |h| h.display().to_string());
+            println!("installed in {}, helper {helper}", global.display());
+        }
+        Ok(false) => println!("not installed: run `gitroute install`"),
+        Err(e) => println!("couldn't read {}: {e:#}", global.display()),
+    }
+
+    println!("\naccounts:");
+    if config.accounts.is_empty() {
+        println!("  none; add one with `gitroute login`");
+    }
+    for a in &config.accounts {
+        println!(
+            "{} {}  {} <{}>{}",
+            if config.default_account_id == Some(a.id) {
+                "*"
+            } else {
+                " "
+            },
+            a.login,
+            a.commit_name,
+            a.commit_email,
+            if a.needs_relogin {
+                "  needs re-login"
+            } else {
+                ""
+            }
+        );
+    }
+
+    println!("\nrules:");
+    if config.rules.is_empty() {
+        println!("  none: every repo uses the default account");
+    }
+    for (rule, found) in config.rules.iter().zip(repos::by_rule(config)) {
+        let count = match found.len() {
+            1 => "1 repo".to_string(),
+            n => format!("{n} repos"),
+        };
+        println!(
+            "  {} → {}  ({count})",
+            paths::display_dir(&rule.path),
+            target_label(config, rule.account)
+        );
+    }
+
+    println!("\nrecent:");
+    match helper_log::read_recent(home, 5) {
+        Ok(entries) if entries.is_empty() => println!("  nothing yet"),
+        Ok(entries) => {
+            let now = unix_now();
+            for e in entries {
+                println!(
+                    "  {}  {}  {}  {}",
+                    helper_log::ago(now, e.time),
+                    helper_log::repo(&e),
+                    e.account.as_deref().unwrap_or("-"),
+                    e.outcome
+                );
+            }
+        }
+        Err(e) => println!("  couldn't read the log: {e:#}"),
+    }
 }
 
 /// Saves the config and, once installed, regenerates the files git reads.

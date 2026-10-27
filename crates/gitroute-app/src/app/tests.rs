@@ -336,26 +336,25 @@ fn needs_relogin_is_shown_with_a_way_out() {
 #[test]
 fn activity_shows_helper_decisions() {
     let f = Fixture::new(false);
-    helper_log::append(
-        &f.home,
-        &Entry {
-            time: unix_now() - 120,
-            action: "get".into(),
-            cwd: f.home.join("Code/Work/repo").display().to_string(),
-            git_dir: Some(".git".into()),
-            path: f.home.join("Code/Work/repo/.git").display().to_string(),
-            rule: Some("Code/Work/".into()),
-            account: Some("work".into()),
-            outcome: "token sent".into(),
-        },
-    )
-    .unwrap();
+    let entry = Entry {
+        time: unix_now() - 120,
+        action: "get".into(),
+        cwd: f.home.join("Code/Work/repo").display().to_string(),
+        git_dir: Some(".git".into()),
+        path: f.home.join("Code/Work/repo/.git").display().to_string(),
+        rule: Some(format!("{}/", f.home.join("Code/Work").display())),
+        account: Some("work".into()),
+        outcome: "token sent".into(),
+    };
+    // A fetch and then a push from the same repo: one row.
+    helper_log::append(&f.home, &entry).unwrap();
+    helper_log::append(&f.home, &entry).unwrap();
     let mut h = f.harness();
     h.get_by_label("Activity").click();
     h.run();
-    h.get_by_label("get: token sent");
+    h.get_by_label("work · token sent · rule ~/Code/Work/ · 2 times");
     h.get_by_label("2 min ago");
-    h.get_by_label("~/Code/Work/repo/.git");
+    h.get_by_label("~/Code/Work/repo");
 }
 
 #[test]
@@ -393,14 +392,6 @@ fn shorten_path_cuts_on_slashes_and_keeps_the_end() {
     );
 }
 
-#[test]
-fn ago_is_rounded_down() {
-    assert_eq!(ago(100, 100), "0 s ago");
-    assert_eq!(ago(100, 41), "59 s ago");
-    assert_eq!(ago(4000, 0), "1 h ago");
-    assert_eq!(ago(200_000, 0), "2 d ago");
-}
-
 /// Renders every page in light and dark to `target/screens/` for design
 /// review: `cargo test -p gitroute-app render_screens -- --ignored`.
 #[test]
@@ -409,20 +400,27 @@ fn render_screens() {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().canonicalize().unwrap();
     for dir in [
-        "Desktop/Code/Personal/side-project",
-        "Desktop/Code/Acme/acme-api",
-        "Desktop/Code/Acme/oss",
+        "Desktop/Code/Personal/side-project/.git",
+        "Desktop/Code/Personal/dotfiles/.git",
+        "Desktop/Code/Acme/acme-api/.git",
+        "Desktop/Code/Acme/acme-web/.git",
+        "Desktop/Code/Acme/infra/terraform/.git",
+        "Desktop/Code/Acme/oss/tool/.git",
         "bin",
     ] {
         fs::create_dir_all(home.join(dir)).unwrap();
     }
     fs::write(home.join("bin/git-credential-gitroute"), "").unwrap();
     let block = "# >>> gitroute (managed, do not edit)\n[include]\n\tpath = ~/.config/gitroute/gitconfig\n# <<< gitroute\n";
+    // A hand-written includeIf from before gitroute, as the checks see it.
     fs::write(
         home.join(".gitconfig"),
-        format!("{ORIGINAL_GITCONFIG}{block}"),
+        format!(
+            "{ORIGINAL_GITCONFIG}[includeIf \"gitdir:~/Desktop/Code/Acme/\"]\n\tpath = ~/.gitconfig-acme\n{block}"
+        ),
     )
     .unwrap();
+    fs::write(home.join(".gitconfig-acme"), "[core]\n\tautocrlf = input\n").unwrap();
     let config = config_path(&home);
     fs::create_dir_all(config.parent().unwrap()).unwrap();
     let code = home.join("Desktop/Code");
@@ -469,7 +467,7 @@ path = "{oss}"
     gitroute_core::managed::write_files(
         &Config::load(&config).unwrap(),
         &home,
-        Path::new("/Users/mona/.cargo/bin/git-credential-gitroute"),
+        &home.join("bin/git-credential-gitroute"),
     )
     .unwrap();
     for (ago, repo, account, outcome) in [
@@ -482,8 +480,11 @@ path = "{oss}"
             "token sent (refreshed first)",
         ),
         (300, "Personal/side-project/.git", "mona", "token sent"),
+        (60, "Acme/acme-web/.git", "mona-work", "token sent"),
         (40, "Acme/acme-api/.git", "mona-work", "token sent"),
+        (38, "Acme/acme-api/.git", "mona-work", "token sent"),
     ] {
+        let rule = code.join(repo.split('/').next().unwrap());
         helper_log::append(
             &home,
             &Entry {
@@ -492,7 +493,7 @@ path = "{oss}"
                 cwd: code.join(repo).display().to_string(),
                 git_dir: Some(".git".into()),
                 path: code.join(repo).display().to_string(),
-                rule: None,
+                rule: Some(format!("{}/", rule.display())),
                 account: Some(account.into()),
                 outcome: outcome.into(),
             },
@@ -552,6 +553,15 @@ path = "{oss}"
                 h.get_by_label("Copy code").scroll_to_me();
                 h.run_steps(4);
             }
+            // Repo counts arrive from a background thread.
+            for _ in 0..200 {
+                if h.query_by_label("Looking for repos…").is_none() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                h.run_steps(1);
+            }
+            h.run_steps(2);
             let image = h.render().unwrap();
             let theme = if theme == egui::Theme::Dark {
                 "dark"
@@ -561,4 +571,28 @@ path = "{oss}"
             image.save(out.join(format!("{name}-{theme}.png"))).unwrap();
         }
     }
+}
+
+#[test]
+fn setup_lists_checks_and_rules_count_repos() {
+    let f = Fixture::new(true);
+    fs::create_dir_all(f.home.join("Code/Work/repo/.git")).unwrap();
+    let mut h = f.harness();
+    h.get_by_label("Setup").click();
+    h.run();
+    h.get_by_label("git doesn't ask gitroute yet");
+    h.get_by_label("work needs to log in again");
+    h.get_by_label_contains("2 things need attention.");
+
+    h.get_by_label("Folder rules").click();
+    h.run();
+    // Counting runs in the background.
+    for _ in 0..100 {
+        if h.query_by_label("1 repo").is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run();
+    }
+    h.get_by_label("1 repo");
 }

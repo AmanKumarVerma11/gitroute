@@ -16,11 +16,12 @@ use eframe::egui::{
 };
 use gitroute_core::accounts::{self, Added};
 use gitroute_core::config::{Config, config_path, lock_dir};
+use gitroute_core::doctor::{self, Finding, Level};
 use gitroute_core::github::{self, User};
-use gitroute_core::helper_log::{self, Entry};
+use gitroute_core::helper_log::{self, Entry, ago};
 use gitroute_core::managed::{self, Change};
 use gitroute_core::token_store::{Access, TokenStore, unix_now};
-use gitroute_core::{paths, resolve};
+use gitroute_core::{paths, repos, resolve};
 use tray_icon::menu::MenuEvent;
 
 use crate::glass::{self, Glass};
@@ -165,15 +166,15 @@ impl Model {
 
     /// `~/x` for paths under home.
     fn tilde(&self, path: &Path) -> String {
-        match path.strip_prefix(&self.home) {
-            Ok(rest) => format!("~/{}", rest.display()),
-            Err(_) => path.display().to_string(),
-        }
+        paths::tilde(path, &self.home)
     }
 }
 
 /// An account id and its verified emails, or why they couldn't be loaded.
 type EmailsLoaded = (u64, Result<Vec<String>, String>);
+
+/// Rule folders, and the repos each rule decides.
+type RepoScan = (Vec<PathBuf>, Vec<Vec<PathBuf>>);
 
 /// An install or uninstall waiting for the user to confirm the diff.
 struct Pending {
@@ -199,6 +200,11 @@ pub struct App {
     check_input: String,
     activity: Vec<Entry>,
     activity_read: Option<Instant>,
+    /// The Setup page's checks; `None` until run, and after anything that
+    /// could change them.
+    checks: Option<Vec<Finding>>,
+    repos: Option<RepoScan>,
+    repos_rx: Option<Receiver<RepoScan>>,
     /// Text and whether it's an error.
     pub message: Option<(String, bool)>,
     want_visible: bool,
@@ -223,6 +229,9 @@ impl App {
             check_input: String::new(),
             activity: Vec::new(),
             activity_read: None,
+            checks: None,
+            repos: None,
+            repos_rx: None,
             message: None,
             want_visible: false,
             last_reload: Instant::now(),
@@ -247,6 +256,16 @@ impl App {
         }
     }
 
+    /// Shows `tab`, with fresh checks or repo counts where it has them.
+    fn open(&mut self, tab: Tab) {
+        self.tab = tab;
+        match tab {
+            Tab::Setup => self.checks = None,
+            Tab::Rules => self.repos = None,
+            _ => {}
+        }
+    }
+
     fn info(&mut self, text: impl Into<String>) {
         self.message = Some((text.into(), false));
     }
@@ -267,6 +286,7 @@ impl App {
     }
 
     fn config_changed(&mut self) {
+        self.checks = None;
         if let Some(tray) = &mut self.tray
             && let Err(e) = tray.update(&self.model.config)
         {
@@ -302,6 +322,10 @@ impl App {
                 Err(e) => self.error(e),
             }
         }
+        if let Some(Ok(scan)) = self.repos_rx.as_ref().map(Receiver::try_recv) {
+            self.repos_rx = None;
+            self.repos = Some(scan);
+        }
         if self.last_reload.elapsed() >= Duration::from_secs(1) {
             self.last_reload = Instant::now();
             if let Some(glass) = &self.glass {
@@ -319,7 +343,7 @@ impl App {
         match action {
             Action::SetDefault(id) => self.set_default(id),
             Action::Open(tab) => {
-                self.tab = tab;
+                self.open(tab);
                 self.want_visible = true;
             }
             Action::Quit => std::process::exit(0),
@@ -412,6 +436,7 @@ impl App {
             Ok(change) if change.is_noop() && install => match self.use_bundled_helper() {
                 Ok(()) => {
                     self.model.installed = true;
+                    self.checks = None;
                     self.info("Already installed. git now uses the helper inside this app.");
                 }
                 Err(e) => self.error(e),
@@ -451,6 +476,7 @@ impl App {
         match applied {
             Ok(backup) => {
                 self.model.installed = pending.install;
+                self.checks = None;
                 let backup = backup.map_or(String::new(), |b| {
                     format!(
                         " The previous version is backed up at {}.",
@@ -562,7 +588,7 @@ impl App {
             let link = Button::new(RichText::new(text).small().color(p.ink_soft))
                 .frame_when_inactive(false);
             if ui.add(link).on_hover_text("Open Setup").clicked() {
-                self.tab = Tab::Setup;
+                self.open(Tab::Setup);
             }
         });
         ui.add_space(22.0);
@@ -612,7 +638,7 @@ impl App {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             if response.clicked() {
-                self.tab = tab;
+                self.open(tab);
             }
         }
     }
@@ -625,6 +651,86 @@ impl App {
             None,
         );
         theme::card(ui).show(ui, |ui| self.install_status(ui));
+        ui.add_space(26.0);
+        self.checks_section(ui);
+    }
+
+    /// `gitroute doctor`: problems first, then notes, then what's fine.
+    fn checks_section(&mut self, ui: &mut egui::Ui) {
+        let p = theme::palette(ui);
+        let checks = self.checks.get_or_insert_with(|| {
+            let mut found = doctor::run(
+                &self.model.config,
+                &self.model.home,
+                &self.model.global_gitconfig,
+            );
+            found.sort_by_key(|f| std::cmp::Reverse(f.level));
+            found
+        });
+        let warnings = checks.iter().filter(|f| f.level == Level::Warn).count();
+        let mut again = false;
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Checks")
+                    .text_style(theme::title())
+                    .color(p.ink),
+            );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                again = ui.button("Check again").clicked();
+            });
+        });
+        ui.add_space(2.0);
+        let summary = match warnings {
+            0 => "Nothing needs attention. Notes list git settings outside gitroute that touch the same repos; gitroute never edits them.".to_string(),
+            1 => "1 thing needs attention. gitroute never edits git settings it didn't write; the fix is yours to make.".to_string(),
+            n => format!("{n} things need attention. gitroute never edits git settings it didn't write; the fixes are yours to make."),
+        };
+        ui.add(Label::new(RichText::new(summary).color(p.ink_soft)).wrap());
+        ui.add_space(14.0);
+        theme::card(ui)
+            .inner_margin(Margin::symmetric(18, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                for (i, finding) in checks.iter().enumerate() {
+                    if i > 0 {
+                        ui.separator();
+                    }
+                    let color = match finding.level {
+                        Level::Ok => p.ok,
+                        Level::Note => p.ink_faint,
+                        Level::Warn => p.warn,
+                    };
+                    ui.add_space(4.0);
+                    ui.horizontal_top(|ui| {
+                        ui.add_space(2.0);
+                        ui.vertical(|ui| {
+                            ui.add_space(5.0);
+                            theme::dot(ui, color);
+                        });
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 3.0;
+                            ui.add(
+                                Label::new(
+                                    RichText::new(&finding.title)
+                                        .font(FontId::new(14.0, theme::medium()))
+                                        .color(p.ink),
+                                )
+                                .wrap(),
+                            );
+                            ui.add(
+                                Label::new(
+                                    RichText::new(&finding.detail).small().color(p.ink_soft),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    });
+                    ui.add_space(4.0);
+                }
+            });
+        if again {
+            self.checks = None;
+        }
     }
 
     fn install_status(&mut self, ui: &mut egui::Ui) {
@@ -1033,7 +1139,63 @@ impl App {
         }
     }
 
+    /// Counts the repos under each rule in the background, once per set of
+    /// rule folders (and again each time the page is opened).
+    fn scan_repos(&mut self, ctx: &egui::Context) {
+        let folders: Vec<PathBuf> = self
+            .model
+            .config
+            .rules
+            .iter()
+            .map(|r| r.path.clone())
+            .collect();
+        let current = self.repos.as_ref().is_some_and(|(f, _)| *f == folders);
+        if current || self.repos_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let (config, ctx) = (self.model.config.clone(), ctx.clone());
+        thread::spawn(move || {
+            let _ = tx.send((folders, repos::by_rule(&config)));
+            ctx.request_repaint();
+        });
+        self.repos_rx = Some(rx);
+    }
+
+    /// "3 repos", with their names on hover; `None` while counting.
+    fn repo_count(&self, index: usize) -> Option<(String, String)> {
+        let (folders, found) = self.repos.as_ref()?;
+        let rule = self.model.config.rules.get(index)?;
+        let i = folders.iter().position(|f| *f == rule.path)?;
+        let list = &found[i];
+        let count = match list.len() {
+            0 => format!("no repos within {} levels", repos::DEPTH),
+            1 => "1 repo".to_string(),
+            n => format!("{n} repos"),
+        };
+        let mut names: Vec<String> = list
+            .iter()
+            .take(12)
+            .map(|r| {
+                r.strip_prefix(&rule.path)
+                    .map_or_else(|_| r.display().to_string(), |rel| rel.display().to_string())
+            })
+            .map(|n| {
+                if n.is_empty() {
+                    "(this folder)".to_string()
+                } else {
+                    n
+                }
+            })
+            .collect();
+        if list.len() > 12 {
+            names.push(format!("and {} more", list.len() - 12));
+        }
+        Some((count, names.join("\n")))
+    }
+
     fn rules_tab(&mut self, ui: &mut egui::Ui) {
+        self.scan_repos(ui.ctx());
         page_header(
             ui,
             "Folder rules",
@@ -1077,6 +1239,9 @@ impl App {
             .iter()
             .map(|r| self.model.tilde(&r.path))
             .collect();
+        let counts: Vec<Option<(String, String)>> = (0..self.model.config.rules.len())
+            .map(|i| self.repo_count(i))
+            .collect();
 
         let (mut changed, mut remove) = (false, None);
         if self.model.config.rules.is_empty() {
@@ -1106,7 +1271,7 @@ impl App {
                             ui.separator();
                         }
                         ui.horizontal(|ui| {
-                            ui.set_min_height(46.0);
+                            ui.set_min_height(54.0);
                             // A hollow bullet: this folder rides the default line.
                             let (letter, color, hollow) = match rule.account {
                                 Some(id) => {
@@ -1132,18 +1297,35 @@ impl App {
                                     ui.set_max_width(width);
                                     let full = format!("{}/", shown[i]);
                                     let chars = (width / 7.9) as usize;
-                                    ui.add(
-                                        Label::new(
-                                            RichText::new(shorten_path(&full, chars))
-                                                .monospace()
-                                                .color(p.ink),
-                                        )
-                                        .truncate(),
-                                    )
-                                    .on_hover_text(full)
+                                    ui.vertical(|ui| {
+                                        ui.spacing_mut().item_spacing.y = 3.0;
+                                        // Centers the two lines on the bullet.
+                                        ui.add_space(8.0);
+                                        let id = ui
+                                            .add(
+                                                Label::new(
+                                                    RichText::new(shorten_path(&full, chars))
+                                                        .monospace()
+                                                        .color(p.ink),
+                                                )
+                                                .truncate(),
+                                            )
+                                            .on_hover_text(full)
+                                            .id;
+                                        let (count, names) = counts[i].clone().unwrap_or((
+                                            "Looking for repos…".into(),
+                                            String::new(),
+                                        ));
+                                        let label = ui
+                                            .label(RichText::new(count).small().color(p.ink_soft));
+                                        if !names.is_empty() {
+                                            label.on_hover_text(names);
+                                        }
+                                        id
+                                    })
+                                    .inner
                                 })
-                                .inner
-                                .id;
+                                .inner;
                             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                                 if theme::danger_button(ui, "Remove").clicked() {
                                     remove = Some(rule.path.clone());
@@ -1438,6 +1620,22 @@ impl App {
         }
         let now = unix_now();
         let lines = self.model.lines(ui.visuals().dark_mode);
+        // Consecutive requests from the same repo with the same outcome
+        // (git asks once per fetch or push) read as one row.
+        let mut rows: Vec<(&Entry, usize)> = Vec::new();
+        for entry in &self.activity {
+            match rows.last_mut() {
+                Some((last, n))
+                    if helper_log::repo(last) == helper_log::repo(entry)
+                        && last.account == entry.account
+                        && last.rule == entry.rule
+                        && last.outcome == entry.outcome =>
+                {
+                    *n += 1
+                }
+                _ => rows.push((entry, 1)),
+            }
+        }
         theme::card(ui)
             .inner_margin(Margin::symmetric(18, 12))
             .show(ui, |ui| {
@@ -1446,12 +1644,9 @@ impl App {
                     .num_columns(3)
                     .spacing(vec2(14.0, 14.0))
                     .show(ui, |ui| {
-                        for entry in &self.activity {
-                            ui.label(
-                                RichText::new(ago(now, entry.time))
-                                    .small()
-                                    .color(p.ink_soft),
-                            );
+                        for (entry, times) in rows {
+                            let when = ago(now, entry.time);
+                            ui.label(RichText::new(when).small().color(p.ink_soft));
                             let line = entry.account.as_deref().and_then(|login| {
                                 let account = self.model.config.account_by_login(login)?;
                                 lines.iter().find(|l| l.0 == account.id)
@@ -1466,25 +1661,47 @@ impl App {
                             }
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 2.0;
+                                let repo = Path::new(helper_log::repo(entry));
                                 ui.add(
                                     Label::new(
-                                        RichText::new(self.model.tilde(Path::new(&entry.path)))
+                                        RichText::new(self.model.tilde(repo))
                                             .monospace()
                                             .color(p.ink),
                                     )
                                     .wrap(),
                                 );
                                 let ok = entry.outcome.starts_with("token sent");
-                                ui.label(
-                                    RichText::new(format!("{}: {}", entry.action, entry.outcome))
-                                        .small()
-                                        .color(if ok { p.ink_soft } else { p.warn }),
-                                );
+                                let mut why = vec![entry.outcome.clone()];
+                                if let Some(login) = &entry.account {
+                                    why.insert(0, login.clone());
+                                }
+                                why.push(match &entry.rule {
+                                    Some(rule) => format!(
+                                        "rule {}/",
+                                        self.model.tilde(Path::new(rule.trim_end_matches('/')))
+                                    ),
+                                    None => "default account".to_string(),
+                                });
+                                if times > 1 {
+                                    why.push(format!("{times} times"));
+                                }
+                                ui.label(RichText::new(why.join(" · ")).small().color(if ok {
+                                    p.ink_soft
+                                } else {
+                                    p.warn
+                                }));
                             });
                             ui.end_row();
                         }
                     });
             });
+        ui.add_space(10.0);
+        if ui.button("Show the log in Finder").clicked() {
+            let _ = Command::new("open")
+                .arg("-R")
+                .arg(helper_log::log_path(&self.model.home))
+                .status();
+        }
     }
 
     fn dialogs(&mut self, ctx: &egui::Context) {
@@ -1859,17 +2076,6 @@ fn diff_view(ui: &mut egui::Ui, diff: &str) {
             _ => p.ink_soft,
         };
         ui.label(RichText::new(line).monospace().color(color));
-    }
-}
-
-/// "12 s ago", "5 min ago", "3 h ago", "2 d ago".
-fn ago(now: u64, then: u64) -> String {
-    let secs = now.saturating_sub(then);
-    match secs {
-        0..60 => format!("{secs} s ago"),
-        60..3600 => format!("{} min ago", secs / 60),
-        3600..86_400 => format!("{} h ago", secs / 3600),
-        _ => format!("{} d ago", secs / 86_400),
     }
 }
 
